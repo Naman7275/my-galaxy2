@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>Supernova Hand Galaxy</title>
+<style>
+body { margin: 0; overflow: hidden; background: #000; color: #fff; font-family: 'Courier New', Courier, monospace; }
+#ui { position: absolute; top: 20px; left: 20px; z-index: 10; background: rgba(0,0,0,0.8); padding: 15px; border-radius: 5px; border: 1px solid #ff0055; pointer-events: none; }
+#video-container { position: absolute; bottom: 20px; right: 20px; width: 160px; border: 1px solid #ff0055; border-radius: 50%; overflow: hidden; height: 160px; }
+video { width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); }
+.status { color: #ff0055; font-weight: bold; }
+</style>
+</head>
+<body>
+<div id="ui">
+<h2 style="margin:0; color:#ff0055;">GALAXY CMD</h2>
+<p>• <b>Point:</b> Rotate</p>
+<p>• <b>Pinch:</b> Zoom</p>
+<p>• <b>Make Fist:</b> <span class="status">SUPERNOVA</span></p>
+</div>
+
+<div id="video-container">
+<video id="input_video"></video>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/three@0.152.0/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+
+<script>
+const videoElement = document.getElementById('input_video');
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(window.innerWidth, window.innerHeight);
+document.body.appendChild(renderer.domElement);
+
+// --- GALAXY DATA ---
+const starCount = 25000;
+const positions = new Float32Array(starCount * 3);
+const originalPositions = new Float32Array(starCount * 3);
+const velocities = new Float32Array(starCount * 3);
+const colors = new Float32Array(starCount * 3);
+const starsGeometry = new THREE.BufferGeometry();
+
+for (let i = 0; i < starCount; i++) {
+const i3 = i * 3;
+const radius = Math.random() * 8;
+const spinAngle = radius * 1.5;
+const branchAngle = (i % 3) * ((Math.PI * 2) / 3);
+
+const x = Math.cos(branchAngle + spinAngle) * radius;
+const y = (Math.random() - 0.5) * 0.4;
+const z = Math.sin(branchAngle + spinAngle) * radius;
+
+positions[i3] = originalPositions[i3] = x;
+positions[i3+1] = originalPositions[i3+1] = y;
+positions[i3+2] = originalPositions[i3+2] = z;
+
+// Explosion directions
+velocities[i3] = (Math.random() - 0.5) * 0.2;
+velocities[i3+1] = (Math.random() - 0.5) * 0.2;
+velocities[i3+2] = (Math.random() - 0.5) * 0.2;
+
+colors[i3] = 1; colors[i3+1] = 1; colors[i3+2] = 1;
+}
+
+starsGeometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+starsGeometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+const starsMaterial = new THREE.PointsMaterial({ size: 0.03, vertexColors: true, blending: THREE.AdditiveBlending });
+const galaxy = new THREE.Points(starsGeometry, starsMaterial);
+scene.add(galaxy);
+camera.position.z = 10;
+
+// --- HAND LOGIC ---
+let isFist = false;
+let targetRotX = 0, targetRotY = 0, targetZoom = 10;
+
+function onResults(results) {
+if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+const hand = results.multiHandLandmarks[0];
+const thumb = hand[4];
+const index = hand[8];
+const middle = hand[12];
+
+// Check for fist (if fingertips are below the palm base)
+const palmBase = hand[0].y;
+isFist = index.y > hand[6].y && middle.y > hand[10].y;
+
+targetRotY = (index.x - 0.5) * 5;
+targetRotX = (index.y - 0.5) * 5;
+
+const dist = Math.hypot(thumb.x - index.x, thumb.y - index.y);
+targetZoom = THREE.MathUtils.mapLinear(dist, 0.05, 0.3, 15, 3);
+}
+}
+
+const hands = new Hands({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}` });
+hands.setOptions({ maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.5 });
+hands.onResults(onResults);
+new Camera(videoElement, { onFrame: async () => { await hands.send({image: videoElement}); }, width: 640, height: 480 }).start();
+
+// --- ANIMATION ---
+function animate() {
+requestAnimationFrame(animate);
+const posAttr = starsGeometry.attributes.position;
+
+for (let i = 0; i < starCount; i++) {
+const i3 = i * 3;
+if (isFist) {
+// Explode outward
+posAttr.array[i3] += velocities[i3] * 2;
+posAttr.array[i3+1] += velocities[i3+1] * 2;
+posAttr.array[i3+2] += velocities[i3+2] * 2;
+} else {
+// Pull back to original position
+posAttr.array[i3] += (originalPositions[i3] - posAttr.array[i3]) * 0.1;
+posAttr.array[i3+1] += (originalPositions[i3+1] - posAttr.array[i3+1]) * 0.1;
+posAttr.array[i3+2] += (originalPositions[i3+2] - posAttr.array[i3+2]) * 0.1;
+}
+}
+posAttr.needsUpdate = true;
+
+galaxy.rotation.y += (targetRotY - galaxy.rotation.y) * 0.05;
+galaxy.rotation.x += (targetRotX - galaxy.rotation.x) * 0.05;
+camera.position.z += (targetZoom - camera.position.z) * 0.1;
+
+renderer.render(scene, camera);
+}
+
+window.addEventListener('resize', () => {
+camera.aspect = window.innerWidth / window.innerHeight;
+camera.updateProjectionMatrix();
+renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+animate();
+</script>
+</body>
+</html>
